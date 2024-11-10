@@ -1,0 +1,7 @@
+services:
+  api:
+    container_name: sec-api
+    build: .
+    command: sh -c "uvicorn app:app --reload --port=8080 --host=0.0.0.0"
+    ports:
+      - "8080:8080"
