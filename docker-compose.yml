@@ -1,0 +1,26 @@
+version: "3.8"
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - MONGODB_URL=mongodb://db:27017/SEC
+    depends_on:
+      - db
+    volumes:
+      - .:/app
+
+  db:
+    image: mongo:5.0
+    container_name: mongo
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+
+volumes:
+  mongodb_data:
