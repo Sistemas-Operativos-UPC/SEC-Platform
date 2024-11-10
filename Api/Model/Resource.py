@@ -12,19 +12,10 @@ from bson import ObjectId
 # It will be represented as a `str` on the model so that it can be serialized to JSON.
 PyObjectId = Annotated[str, BeforeValidator(str)]
 
-class CommentImageModel(BaseModel):
-    url: str = Field(...)
-
-    model_config = ConfigDict(
-        arbitrary_types_allowed=True,
-        json_encoders={ObjectId: str},
-    )
-
 class CommentModel(BaseModel):
     id: Optional[PyObjectId] = Field(alias="_id", default=None)
     user_id: PyObjectId = Field(...)
     content: str = Field(...)
-    images: Optional[List[CommentImageModel]] = None
     created_at: Optional[datetime] = Field(default_factory=datetime.utcnow)
 
     model_config = ConfigDict(
@@ -35,8 +26,7 @@ class CommentModel(BaseModel):
 
 class FileModel(BaseModel):
     file_name: str = Field(...)
-    mime_type: str = Field(...)
-    url: str = Field(...)
+    uploaded_at: datetime = Field(default_factory=datetime.utcnow)
 
     model_config = ConfigDict(
         arbitrary_types_allowed=True,
@@ -45,11 +35,10 @@ class FileModel(BaseModel):
 
 
 class ResourceModel(BaseModel):
-    id: Optional[PyObjectId] = Field(alias="_id", default=None)
+    id: Optional[str] = Field(alias="_id", default=None)
     title: str = Field(...)
     type: str = Field(..., enum=["document", "video", "image"])
-    files: Optional[List[FileModel]] = None
-    comments: Optional[List[CommentModel]] = None
+    file_ids: Optional[List[str]] = None  # Lista de IDs de archivos en GridFS
     created_at: Optional[datetime] = Field(default_factory=datetime.utcnow)
 
     model_config = ConfigDict(

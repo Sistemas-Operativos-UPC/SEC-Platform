@@ -1,83 +1,18 @@
-from typing import List
+from typing import List, Optional
 
-from fastapi import FastAPI, Body, HTTPException, status, APIRouter
-from fastapi.responses import Response
+from fastapi import FastAPI, Body, HTTPException, status, APIRouter, UploadFile, File, Form
+from fastapi.responses import Response, FileResponse
 from bson import ObjectId
 from pymongo import ReturnDocument
+from motor.motor_asyncio import AsyncIOMotorGridFSBucket
+from Api.Model.Resource import ResourceModel, CommentModel, FileModel
 
-from Api.Config.db import educational_institutions_collection
-from Api.Model.EducationalInstitution import EducationalInstitutionModel, UpdateEducationalInstitutionModel, ClassModel, \
-    UpdateClassModel
-from Api.Model.Resource import ResourceModel, CommentModel
+from Api.Config.db import educational_institutions_collection, db
+
+# Configurar GridFS
+grid_fs_bucket = AsyncIOMotorGridFSBucket(db)
 
 resourcesRoutes = APIRouter()
-
-
-@resourcesRoutes.get(
-    "/educationalInstitutions/{institution_id}/classes/{class_id}/resources",
-    response_description="Get all resources of a class",
-    response_model=List[ResourceModel],
-    response_model_by_alias=False,
-    tags=["educationalInstitutions"],
-)
-async def get_resources(institution_id: str, class_id: str):
-    """
-    Get all resources for a specific class in an educational institution.
-    """
-    institution = await educational_institutions_collection.find_one({"_id": ObjectId(institution_id)})
-
-    if institution is None:
-        raise HTTPException(status_code=404, detail=f"Institution {institution_id} not found")
-
-    classes = institution.get("classes", [])
-    for cls in classes:
-        if str(cls.get("_id")) == class_id:
-            resources = cls.get("resources", [])
-            return [
-                ResourceModel(
-                    id=str(res.get("_id")),
-                    title=res["title"],
-                    type=res["type"],
-                    files=res.get("files"),
-                    comments=res.get("comments"),
-                    created_at=res.get("created_at")
-                )
-                for res in resources
-            ]
-
-    raise HTTPException(status_code=404, detail=f"Class {class_id} not found in institution {institution_id}")
-
-@resourcesRoutes.get(
-    "/educationalInstitutions/{institution_id}/classes/{class_id}/resources/{resource_id}",
-    response_description="Get a specific resource of a class",
-    response_model=ResourceModel,
-    response_model_by_alias=False,
-    tags=["educationalInstitutions"],
-)
-async def get_resource(institution_id: str, class_id: str, resource_id: str):
-    """
-    Get a specific resource of a class in an educational institution.
-    """
-    institution = await educational_institutions_collection.find_one({"_id": ObjectId(institution_id)})
-
-    if institution is None:
-        raise HTTPException(status_code=404, detail=f"Institution {institution_id} not found")
-
-    for cls in institution.get("classes", []):
-        if str(cls.get("_id")) == class_id:
-            for res in cls.get("resources", []):
-                if str(res.get("_id")) == resource_id:
-                    return ResourceModel(
-                        id=str(res.get("_id")),
-                        title=res["title"],
-                        type=res["type"],
-                        files=res.get("files"),
-                        comments=res.get("comments"),
-                        created_at=res.get("created_at")
-                    )
-            raise HTTPException(status_code=404, detail=f"Resource {resource_id} not found in class {class_id}")
-    raise HTTPException(status_code=404, detail=f"Class {class_id} not found in institution {institution_id}")
-
 
 @resourcesRoutes.post(
     "/educationalInstitutions/{institution_id}/classes/{class_id}/resources",
@@ -88,18 +23,17 @@ async def get_resource(institution_id: str, class_id: str, resource_id: str):
     tags=["educationalInstitutions"],
 )
 async def create_resource(
-        institution_id: str, class_id: str, resource_data: ResourceModel = Body(...)
+        institution_id: str,
+        class_id: str,
+        resource: ResourceModel = Body(...),
 ):
     """
-    Add a new resource to a specific class in an educational institution.
+    Agregar un nuevo recurso a una clase específica en una institución educativa.
     """
-    # Asignar un nuevo ObjectId al recurso
     resource_id = ObjectId()
-    resource_data.id = str(resource_id)
-    resource_dict = resource_data.model_dump(by_alias=True, exclude_unset=True)
-
-    # Convertir 'id' a ObjectId para almacenamiento
-    resource_dict["_id"] = resource_id
+    resource.id = str(resource_id)
+    resource_data = resource.model_dump(by_alias=True, exclude_unset=True)
+    resource_data["_id"] = resource_id
 
     # Agregar el nuevo recurso al arreglo 'resources' de la clase
     result = await educational_institutions_collection.update_one(
@@ -108,37 +42,62 @@ async def create_resource(
             "classes._id": ObjectId(class_id)
         },
         {
-            "$push": {"classes.$.resources": resource_dict}
+            "$push": {"classes.$.resources": resource_data}
         }
     )
 
     if result.modified_count == 0:
         raise HTTPException(status_code=404, detail=f"Class {class_id} not found in institution {institution_id}")
 
-    return resource_data
+    return resource
 
 
-@resourcesRoutes.put(
-    "/educationalInstitutions/{institution_id}/classes/{class_id}/resources/{resource_id}",
-    response_description="Update a resource in a class",
-    response_model=ResourceModel,
-    response_model_by_alias=False,
+@resourcesRoutes.post(
+    "/educationalInstitutions/{institution_id}/classes/{class_id}/resources/{resource_id}/files",
+    response_description="Upload files to a resource",
+    status_code=status.HTTP_201_CREATED,
     tags=["educationalInstitutions"],
 )
-async def update_resource(
-        institution_id: str, class_id: str, resource_id: str, resource_data: ResourceModel = Body(...)
+async def upload_files(
+        institution_id: str,
+        class_id: str,
+        resource_id: str,
+        files: List[UploadFile] = File(...)
 ):
     """
-    Update a resource in a specific class in an educational institution.
+    Subir archivos a un recurso específico en una clase.
     """
-    update_data = {
-        k: v for k, v in resource_data.model_dump(exclude_unset=True).items() if v is not None
-    }
+    # Verificar que el recurso existe
+    institution = await educational_institutions_collection.find_one({"_id": ObjectId(institution_id)})
+    if not institution:
+        raise HTTPException(status_code=404, detail=f"Institution {institution_id} not found")
 
-    if len(update_data) == 0:
-        raise HTTPException(status_code=400, detail="No update data provided")
+    resource_found = False
+    for cls in institution.get("classes", []):
+        if str(cls.get("_id")) == class_id:
+            for res in cls.get("resources", []):
+                if str(res.get("_id")) == resource_id:
+                    resource_found = True
+                    file_ids = res.get("file_ids", [])
+                    break
+            break
 
-    # Actualizar el recurso utilizando arrayFilters
+    if not resource_found:
+        raise HTTPException(status_code=404, detail=f"Resource {resource_id} not found in class {class_id}")
+
+    # Subir archivos a GridFS y obtener sus IDs
+    uploaded_file_ids = []
+    for file in files:
+        contents = await file.read()
+        grid_in = grid_fs_bucket.open_upload_stream(
+            file.filename,
+            metadata={"contentType": file.content_type}
+        )
+        await grid_in.write(contents)
+        await grid_in.close()
+        uploaded_file_ids.append(grid_in._id)
+
+    # Actualizar el recurso con los IDs de los archivos
     result = await educational_institutions_collection.update_one(
         {
             "_id": ObjectId(institution_id),
@@ -146,9 +105,7 @@ async def update_resource(
             "classes.resources._id": ObjectId(resource_id)
         },
         {
-            "$set": {
-                **{f"classes.$[class].resources.$[res].{key}": value for key, value in update_data.items()}
-            }
+            "$push": {"classes.$[class].resources.$[res].file_ids": {"$each": uploaded_file_ids}}
         },
         array_filters=[
             {"class._id": ObjectId(class_id)},
@@ -157,53 +114,203 @@ async def update_resource(
     )
 
     if result.modified_count == 0:
-        raise HTTPException(status_code=404, detail=f"Resource {resource_id} not found in class {class_id}")
+        raise HTTPException(status_code=500, detail="Failed to update resource with file IDs")
 
-    # Devolver el recurso actualizado
+    return {"file_ids": [str(file_id) for file_id in uploaded_file_ids]}
+
+
+@resourcesRoutes.get(
+    "/educationalInstitutions/{institution_id}/classes/{class_id}/resources/{resource_id}",
+    response_description="Get a specific resource of a class",
+    response_model=ResourceModel,
+    response_model_by_alias=False,
+    tags=["educationalInstitutions"],
+)
+async def get_resource(institution_id: str, class_id: str, resource_id: str):
+    """
+    Obtener un recurso específico de una clase en una institución educativa.
+    """
+    institution = await educational_institutions_collection.find_one(
+        {
+            "_id": ObjectId(institution_id),
+            "classes._id": ObjectId(class_id),
+            "classes.resources._id": ObjectId(resource_id)
+        },
+        {
+            "classes.$": 1  # Solo devolver la clase que coincide
+        }
+    )
+
+    if not institution or "classes" not in institution:
+        raise HTTPException(status_code=404, detail=f"Resource {resource_id} not found")
+
+    resource = None
+    for res in institution["classes"][0]["resources"]:
+        if str(res.get("_id")) == resource_id:
+            resource = res
+            break
+
+    if resource is None:
+        raise HTTPException(status_code=404, detail=f"Resource {resource_id} not found")
+
+    return ResourceModel(
+        id=str(resource["_id"]),
+        title=resource["title"],
+        type=resource["type"],
+        file_ids=[str(fid) for fid in resource.get("file_ids", [])],
+        created_at=resource.get("created_at")
+    )
+
+@resourcesRoutes.get(
+    "/educationalInstitutions/{institution_id}/classes/{class_id}/resources/{resource_id}/files",
+    response_description="Get all files of a resource",
+    tags=["educationalInstitutions"],
+)
+async def get_files(institution_id: str, class_id: str, resource_id: str):
+    """
+    Obtener todos los archivos asociados a un recurso.
+    """
+    institution = await educational_institutions_collection.find_one(
+        {
+            "_id": ObjectId(institution_id),
+            "classes._id": ObjectId(class_id),
+            "classes.resources._id": ObjectId(resource_id)
+        },
+        {
+            "classes.$": 1  # Solo devolver la clase que coincide
+        }
+    )
+
+    if not institution or "classes" not in institution:
+        raise HTTPException(status_code=404, detail=f"Resource {resource_id} not found")
+
+    resource = None
+    for res in institution["classes"][0]["resources"]:
+        if str(res.get("_id")) == resource_id:
+            resource = res
+            break
+
+    if resource is None:
+        raise HTTPException(status_code=404, detail=f"Resource {resource_id} not found")
+
+    file_ids = resource.get("file_ids", [])
+    files_info = []
+
+    for file_id in file_ids:
+        grid_out = await grid_fs_bucket.open_download_stream(ObjectId(file_id))
+        files_info.append({
+            "file_id": str(file_id),
+            "filename": grid_out.filename,
+            "content_type": grid_out.metadata.get("contentType") if grid_out.metadata else None,
+        })
+        await grid_out.close()
+
+    return files_info
+
+
+@resourcesRoutes.get(
+    "/educationalInstitutions/{institution_id}/classes/{class_id}/resources/{resource_id}/files/{file_id}",
+    response_description="Download a specific file from a resource",
+    tags=["educationalInstitutions"],
+)
+async def download_resource_file(
+        institution_id: str,
+        class_id: str,
+        resource_id: str,
+        file_id: str
+):
+    """
+    Download a specific file associated with a resource in a class.
+    """
+    # Validate 'file_id' and retrieve 'file_id_obj'
+    try:
+        file_id_obj = ObjectId(file_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid file ID format")
+
+    # Verify that the file belongs to the resource
+    institution = await educational_institutions_collection.find_one(
+        {
+            "_id": ObjectId(institution_id),
+            "classes._id": ObjectId(class_id),
+            "classes.resources._id": ObjectId(resource_id)
+        },
+        {
+            "classes.$": 1  # Only return the matching class
+        }
+    )
+
+    if not institution or "classes" not in institution:
+        raise HTTPException(status_code=404, detail=f"Resource {resource_id} not found")
+
+    resource = None
+    for res in institution["classes"][0]["resources"]:
+        if str(res.get("_id")) == resource_id:
+            resource = res
+            break
+
+    if resource is None:
+        raise HTTPException(status_code=404, detail=f"Resource {resource_id} not found")
+
+    # Ensure 'file_id' is associated with the resource
+    resource_file_ids = [ObjectId(f_id) for f_id in resource.get("file_ids", []) if ObjectId.is_valid(f_id)]
+    if file_id_obj not in resource_file_ids:
+        raise HTTPException(status_code=404, detail="File not found for this resource")
+
+    # Find the file using the cursor
+    grid_out_cursor = grid_fs_bucket.find({"_id": file_id_obj})
+    try:
+        grid_out = await grid_out_cursor.next()
+    except StopAsyncIteration:
+        raise HTTPException(status_code=404, detail="File not found in GridFS")
+
+    # Read the content asynchronously
+    content = await grid_out.read()
+    content_type = grid_out.metadata.get("contentType", 'application/octet-stream') if grid_out.metadata else 'application/octet-stream'
+    filename = grid_out.filename
+    await grid_out.close()
+
+    # Set 'Content-Disposition' to 'inline' to display in the browser
+    return Response(
+        content,
+        media_type=content_type,
+        headers={"Content-Disposition": f'inline; filename=\"{filename}\"'}
+    )
+
+
+
+@resourcesRoutes.get(
+    "/educationalInstitutions/{institution_id}/classes/{class_id}/resources/{resource_id}/comments",
+    response_description="Get all comments of a resource",
+    response_model=List[CommentModel],
+    response_model_by_alias=False,
+    tags=["educationalInstitutions"],
+)
+async def get_comments(institution_id: str, class_id: str, resource_id: str):
+    """
+    Obtener todos los comentarios de un recurso específico en una clase.
+    """
     institution = await educational_institutions_collection.find_one({"_id": ObjectId(institution_id)})
 
-    if institution is None:
+    if not institution:
         raise HTTPException(status_code=404, detail=f"Institution {institution_id} not found")
 
     for cls in institution.get("classes", []):
         if str(cls.get("_id")) == class_id:
             for res in cls.get("resources", []):
                 if str(res.get("_id")) == resource_id:
-                    return ResourceModel(
-                        id=str(res.get("_id")),
-                        title=res["title"],
-                        type=res["type"],
-                        files=res.get("files"),
-                        comments=res.get("comments"),
-                        created_at=res.get("created_at")
-                    )
-    raise HTTPException(status_code=404, detail=f"Resource {resource_id} not found after update")
-
-
-@resourcesRoutes.delete(
-    "/educationalInstitutions/{institution_id}/classes/{class_id}/resources/{resource_id}",
-    response_description="Delete a resource from a class",
-    status_code=status.HTTP_204_NO_CONTENT,
-    tags=["educationalInstitutions"],
-)
-async def delete_resource(institution_id: str, class_id: str, resource_id: str):
-    """
-    Delete a resource from a specific class in an educational institution.
-    """
-    result = await educational_institutions_collection.update_one(
-        {
-            "_id": ObjectId(institution_id),
-            "classes._id": ObjectId(class_id)
-        },
-        {
-            "$pull": {"classes.$.resources": {"_id": ObjectId(resource_id)}}
-        }
-    )
-
-    if result.modified_count == 0:
-        raise HTTPException(status_code=404, detail=f"Resource {resource_id} not found in class {class_id}")
-
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
+                    comments = res.get("comments", [])
+                    # Convertir los comentarios a modelos
+                    return [
+                        CommentModel(
+                            id=str(comment.get("_id")),
+                            user_id=str(comment["user_id"]),
+                            content=comment["content"],
+                            created_at=comment.get("created_at")
+                        ) for comment in comments
+                    ]
+            raise HTTPException(status_code=404, detail=f"Resource {resource_id} not found")
+    raise HTTPException(status_code=404, detail=f"Class {class_id} not found")
 
 
 @resourcesRoutes.post(
@@ -215,10 +322,13 @@ async def delete_resource(institution_id: str, class_id: str, resource_id: str):
     tags=["educationalInstitutions"],
 )
 async def create_comment(
-        institution_id: str, class_id: str, resource_id: str, comment_data: CommentModel = Body(...)
+        institution_id: str,
+        class_id: str,
+        resource_id: str,
+        comment_data: CommentModel = Body(...)
 ):
     """
-    Add a new comment to a specific resource in a class.
+    Agregar un nuevo comentario a un recurso específico en una clase.
     """
     # Asignar un nuevo ObjectId al comentario
     comment_id = ObjectId()
@@ -246,7 +356,8 @@ async def create_comment(
     )
 
     if result.modified_count == 0:
-        raise HTTPException(status_code=404, detail=f"Resource {resource_id} not found in class {class_id}")
+        raise HTTPException(status_code=404, detail=f"Resource {resource_id} not found")
 
     return comment_data
+
 
