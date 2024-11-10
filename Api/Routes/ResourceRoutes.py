@@ -3,14 +3,9 @@ from typing import List, Optional
 from fastapi import FastAPI, Body, HTTPException, status, APIRouter, UploadFile, File, Form
 from fastapi.responses import Response, FileResponse
 from bson import ObjectId
-from pymongo import ReturnDocument
-from motor.motor_asyncio import AsyncIOMotorGridFSBucket
 from Api.Model.Resource import ResourceModel, CommentModel, FileModel
 
-from Api.Config.db import educational_institutions_collection, db
-
-# Configurar GridFS
-grid_fs_bucket = AsyncIOMotorGridFSBucket(db)
+from Api.Config.db import educational_institutions_collection, db, grid_fs_bucket
 
 resourcesRoutes = APIRouter()
 
@@ -264,17 +259,20 @@ async def download_resource_file(
     except StopAsyncIteration:
         raise HTTPException(status_code=404, detail="File not found in GridFS")
 
-    # Read the content asynchronously
-    content = await grid_out.read()
+    # Read the content
+    content = grid_out.read()
     content_type = grid_out.metadata.get("contentType", 'application/octet-stream') if grid_out.metadata else 'application/octet-stream'
     filename = grid_out.filename
-    await grid_out.close()
+
+    # Close the grid_out if it is not None
+    if grid_out:
+        await grid_out.close()
 
     # Set 'Content-Disposition' to 'inline' to display in the browser
     return Response(
         content,
         media_type=content_type,
-        headers={"Content-Disposition": f'inline; filename=\"{filename}\"'}
+        headers={"Content-Disposition": f'inline; filename="{filename}"'}
     )
 
 
