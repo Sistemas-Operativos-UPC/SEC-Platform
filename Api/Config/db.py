@@ -1,6 +1,11 @@
 from motor.motor_asyncio import AsyncIOMotorGridFSBucket, AsyncIOMotorClient
+import os
 
-uri = "mongodb+srv://SEC:FzOsXLbVGfKnpqcQ@cluster0.pixei.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0"
+uri = os.getenv("MONGO_URI")
+
+if not uri:
+    raise ValueError("MONGO_URI is not set")
+
 client = AsyncIOMotorClient(uri)
 db = client.SEC
 
