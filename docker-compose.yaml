@@ -5,3 +5,17 @@ services:
       context: .
     ports:
       - "8000:8000"
+    depends_on:
+      - db
+    environment:
+      MONGO_URI: "mongodb://root:passwordABC123!@db:27017/SEC?authSource=admin"
+  db:
+    image: mongo
+    ports:
+      - "27017:27017"
+    volumes:
+      - ./data:/data/db
+    environment:
+      MONGO_INITDB_DATABASE: SEC
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD: passwordABC123!
