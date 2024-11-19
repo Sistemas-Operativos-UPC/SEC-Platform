@@ -12,7 +12,7 @@ services:
   db:
     image: mongo
     ports:
-      - "27017:27017"
+      - "8085:27017"
     volumes:
       - ./data:/data/db
     environment:
